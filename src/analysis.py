@@ -125,7 +125,8 @@ def run_spectral_analysis(model_name, inputs, device="cuda", offline=False,
     
     model_kwargs = {
         "output_attentions": True, 
-        "output_hidden_states": True
+        "output_hidden_states": True,
+        "use_safetensors": True 
     }
     
     if quantization_8bit:
@@ -133,45 +134,66 @@ def run_spectral_analysis(model_name, inputs, device="cuda", offline=False,
     elif quantization_4bit:
         model_kwargs["load_in_4bit"] = True
         
-    config = GSPConfig(
-        model_name=model_name, 
-        device=device, 
-        local_files_only=offline,
-        model_kwargs=model_kwargs
-    )
+    attempts = [True, False] if not offline else [True]
     
-    results_data = []
+    last_exception = None
+    for attempt_offline in attempts:
+        try:
+            mode_str = "OFFLINE" if attempt_offline else "ONLINE"
+            print(f"[{mode_str}] Attempting to load model: {model_name}")
+            
+            config = GSPConfig(
+                model_name=model_name, 
+                device=device, 
+                local_files_only=attempt_offline,
+                model_kwargs=model_kwargs
+            )
+            
+            results_data = []
 
-    with GSPDiagnosticsFramework(config) as framework:
-        framework.instrumenter.load_model(model_name)
-        
-        if ablation_mask:
-            hooks = register_ablation_hooks(framework.instrumenter.model, ablation_mask)
-            if hooks: print(f"Registered {len(hooks)} ablation hooks.")
-        
-        for item in tqdm(inputs, desc="Inference"):
-            for r in range(runs):
-                try:
-                    analysis = framework.analyze_text(item['text'], save_results=False)
-                    traj = []
-                    if 'layer_diagnostics' in analysis:
-                        for idx, ld in enumerate(analysis['layer_diagnostics']):
-                            traj.append({
-                                "layer": idx,
-                                "fiedler_value": float(ld.fiedler_value) if ld.fiedler_value is not None else None,
-                                "hfer": float(ld.hfer) if ld.hfer is not None else None,
-                                "smoothness": float(ld.smoothness_index) if ld.smoothness_index is not None else None,
-                                "entropy": float(ld.spectral_entropy) if ld.spectral_entropy is not None else None,
+            with GSPDiagnosticsFramework(config) as framework:
+                framework.instrumenter.load_model(model_name)
+                
+                if ablation_mask:
+                    hooks = register_ablation_hooks(framework.instrumenter.model, ablation_mask)
+                    if hooks: print(f"Registered {len(hooks)} ablation hooks.")
+                
+                for item in tqdm(inputs, desc="Inference"):
+                    for r in range(runs):
+                        try:
+                            analysis = framework.analyze_text(item['text'], save_results=False)
+                            traj = []
+                            if 'layer_diagnostics' in analysis:
+                                for idx, ld in enumerate(analysis['layer_diagnostics']):
+                                    traj.append({
+                                        "layer": idx,
+                                        "fiedler_value": float(ld.fiedler_value) if ld.fiedler_value is not None else None,
+                                        "hfer": float(ld.hfer) if ld.hfer is not None else None,
+                                        "smoothness": float(ld.smoothness_index) if ld.smoothness_index is not None else None,
+                                        "entropy": float(ld.spectral_entropy) if ld.spectral_entropy is not None else None,
+                                    })
+                            
+                            results_data.append({
+                                "id": item.get('id', 'unknown'),
+                                "lang": item.get('lang', 'unknown'),
+                                "type": item.get('type', 'unknown'),
+                                "run": r,
+                                "trajectory": traj
                             })
-                    
-                    results_data.append({
-                        "id": item.get('id', 'unknown'),
-                        "lang": item.get('lang', 'unknown'),
-                        "type": item.get('type', 'unknown'),
-                        "run": r,
-                        "trajectory": traj
-                    })
-                except Exception as e:
-                    print(f"Error analyzing {item.get('id', '?')}: {e}")
-                    
-    return results_data
+                        except Exception as e:
+                            print(f"Error analyzing {item.get('id', '?')}: {e}")
+            
+            # If we reached here, success!
+            return results_data
+            
+        except Exception as e:
+            last_exception = e
+            if attempt_offline and not offline:
+                print(f"Offline load failed for {model_name}. Retrying online...")
+            else:
+                print(f"Failed to load {model_name} (Offline={attempt_offline}): {e}")
+
+    # If all attempts failed
+    if last_exception:
+        raise last_exception
+    return []

@@ -22,10 +22,17 @@ legacy-v2/
 data/
 !data/.keep
 
-# Artifacts (except figures/)
-!figures/
+# Artifacts (ignore by default)
 *.csv
 *.log
+*.pdf
+*.png
+
+# Keep figures/ and results/ tracked for paper reproduction
+!figures/
+!figures/*.png
+!results/
+!results/*.json
 
 # IDE
 .vscode/
