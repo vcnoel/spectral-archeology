@@ -21,6 +21,7 @@ legacy/
 legacy-v2/
 data/
 !data/.keep
+!data/rigorous_comparison/
 
 # Artifacts (ignore by default)
 *.csv
